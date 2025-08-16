@@ -1,0 +1,153 @@
+﻿import argparse
+import os
+import json
+import logging
+from datetime import datetime
+
+
+from dotenv import load_dotenv
+import openai
+import requests
+
+
+# --- Load ENV ---
+load_dotenv()
+
+
+# LLM setup
+openai.api_key = os.getenv("LLM_API_KEY")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+
+
+# Output dirs
+def ensure_dir(path):
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+# Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("multi-agent")
+
+
+# --- Agents ---
+def caption_agent(media_path, metadata):
+    """Generate captions & hashtags with LLM"""
+    prompt = f"""
+    Create a social media caption for the following content:
+    Title: {metadata.get('title')}
+    Keywords: {metadata.get('keywords')}
+    Tone: {metadata.get('tone')}
+    Call to Action: {metadata.get('cta')}
+    Audience: {metadata.get('audience')}
+    """
+
+
+    response = openai.ChatCompletion.create(
+        model=LLM_MODEL,
+        messages=[{"role": "system", "content": "You are a social media copywriter."},
+                  {"role": "user", "content": prompt}],
+        max_tokens=200
+    )
+    caption = response.choices[0].message["content"].strip()
+    logger.info(f"Generated caption: {caption}")
+    return caption
+
+
+def instagram_poster(media_path, caption, story=False, live=False):
+    """Post to Instagram via Graph API (stub for demo)"""
+    if not live:
+        logger.info(f"[Dry-run] Would post to Instagram: {media_path}")
+        return {"platform": "instagram", "status": "dry-run", "caption": caption}
+    token = os.getenv("IG_ACCESS_TOKEN")
+    user_id = os.getenv("IG_USER_ID")
+    if not token or not user_id:
+        raise ValueError("Missing IG_ACCESS_TOKEN or IG_USER_ID")
+
+
+    url = f"https://graph.facebook.com/v17.0/{user_id}/media"
+    res = requests.post(url, data={
+        "image_url": "https://via.placeholder.com/1080.png",
+        "caption": caption,
+        "access_token": token
+    })
+    return res.json()
+
+
+def youtube_poster(media_path, caption, live=False):
+    """Stub for YouTube upload"""
+    if not live:
+        logger.info(f"[Dry-run] Would post to YouTube: {media_path}")
+        return {"platform": "youtube", "status": "dry-run", "caption": caption}
+    return {"platform": "youtube", "status": "live-posted"}
+
+
+def tiktok_poster(media_path, caption, live=False):
+    """Stub for TikTok upload"""
+    if not live:
+        logger.info(f"[Dry-run] Would post to TikTok: {media_path}")
+        return {"platform": "tiktok", "status": "dry-run", "caption": caption}
+    return {"platform": "tiktok", "status": "live-posted"}
+
+
+# --- Pipeline ---
+def run_pipeline(inbox, outdir, platforms, also_story=False, live=False):
+    logs_dir = ensure_dir(os.path.join(outdir, "logs"))
+    published_dir = ensure_dir(os.path.join(outdir, "published"))
+    log_file = os.path.join(logs_dir, "run.log")
+
+
+    logging.basicConfig(filename=log_file, level=logging.INFO)
+
+
+    # Load metadata
+    metadata_path = os.path.join(inbox, "metadata.json")
+    metadata = {}
+    if os.path.exists(metadata_path):
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+
+
+    results = []
+    for file in os.listdir(inbox):
+        if file.endswith((".png", ".jpg", ".jpeg", ".mp4", ".mov")):
+            media_path = os.path.join(inbox, file)
+            caption = caption_agent(media_path, metadata)
+
+
+            if "instagram" in platforms:
+                results.append(instagram_poster(media_path, caption, story=also_story, live=live))
+            if "youtube" in platforms:
+                results.append(youtube_poster(media_path, caption, live=live))
+            if "tiktok" in platforms:
+                results.append(tiktok_poster(media_path, caption, live=live))
+
+
+    # Save receipt
+    receipt = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "platforms": platforms,
+        "live": live,
+        "results": results
+    }
+    receipt_file = os.path.join(published_dir, f"receipt_{datetime.utcnow().timestamp()}.json")
+    with open(receipt_file, "w") as f:
+        json.dump(receipt, f, indent=2)
+
+
+    logger.info("Publishing complete.")
+    return receipt
+
+
+# --- CLI ---
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--inbox", type=str, default="./inbox")
+    parser.add_argument("--out", type=str, default="./out")
+    parser.add_argument("--platforms", type=str, default="instagram")
+    parser.add_argument("--also-story", action="store_true")
+    parser.add_argument("--live", action="store_true")
+    args = parser.parse_args()
+
+
+    run_pipeline(args.inbox, args.out, args.platforms.split(","), also_story=args.also_story, live=args.live)

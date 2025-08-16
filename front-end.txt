@@ -1,0 +1,104 @@
+﻿import streamlit as st
+import os
+import tempfile
+import subprocess
+import json
+
+
+INBOX_DIR = "inbox"
+OUT_DIR = "out"
+
+
+os.makedirs(INBOX_DIR, exist_ok=True)
+os.makedirs(OUT_DIR, exist_ok=True)
+
+
+st.set_page_config(page_title="Multi-Agent Distributor", layout="wide")
+st.title("📢 Multi-Agent Content Distributor")
+
+
+st.write("Upload content, generate captions, and publish to Instagram, YouTube, TikTok.")
+
+
+# --- Upload ---
+uploaded_files = st.file_uploader("Upload media (image/video)", accept_multiple_files=True)
+if uploaded_files:
+    for uploaded_file in uploaded_files:
+        file_path = os.path.join(INBOX_DIR, uploaded_file.name)
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        st.success(f"Saved {uploaded_file.name}")
+
+
+# --- Metadata ---
+st.subheader("📝 Post Metadata")
+title = st.text_input("Title", "")
+keywords = st.text_area("Keywords (comma-separated)", "")
+tone = st.text_input("Tone", "friendly")
+cta = st.text_input("Call to Action", "Follow for more!")
+audience = st.text_input("Audience", "general")
+
+
+metadata = {
+    "title": title,
+    "keywords": keywords.split(",") if keywords else [],
+    "tone": tone,
+    "cta": cta,
+    "audience": audience
+}
+
+
+if st.button("💾 Save Metadata"):
+    meta_path = os.path.join(INBOX_DIR, "metadata.json")
+    with open(meta_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+    st.success("Metadata saved!")
+
+
+# --- Platforms ---
+st.subheader("📲 Platforms")
+platforms = st.multiselect("Select platforms", ["instagram", "youtube", "tiktok"], default=["instagram"])
+also_story = st.checkbox("Also post to IG Story")
+live_mode = st.checkbox("Live mode (real posting)")
+
+
+# --- Run backend ---
+if st.button("🚀 Generate & Publish"):
+    args = [
+        "python", "content-multi-agent-live.py",
+        "--inbox", INBOX_DIR,
+        "--out", OUT_DIR,
+        "--platforms", ",".join(platforms),
+    ]
+    if also_story:
+        args.append("--also-story")
+    if live_mode:
+        args.append("--live")
+
+
+    st.info("Running backend...")
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, check=False)
+        st.text_area("Backend Output", result.stdout + "\n" + result.stderr, height=300)
+        st.success("Publishing complete.")
+    except Exception as e:
+        st.error(f"Error running backend: {e}")
+
+
+# --- Logs ---
+st.subheader("📜 Logs & Receipts")
+
+
+log_file = os.path.join(OUT_DIR, "logs", "run.log")
+if os.path.exists(log_file):
+    with open(log_file) as f:
+        st.text_area("Latest Log", f.read(), height=200)
+
+
+pub_dir = os.path.join(OUT_DIR, "published")
+if os.path.exists(pub_dir):
+    receipts = os.listdir(pub_dir)
+    if receipts:
+        latest_receipt = os.path.join(pub_dir, sorted(receipts)[-1])
+        with open(latest_receipt) as f:
+            st.json(json.load(f))
